@@ -9,21 +9,23 @@ A small desk display that shows live stats from your computer: CPU, memory, GPU,
 
 A Python script on the PC collects the numbers and streams them over USB to a microcontroller, which draws them on its screen. The main build runs on a £10 ESP32 touchscreen board and needs **no soldering and no wiring**.
 
+![The dashboard pages: overview, GPU, history, network, clock and the waiting screen](docs/screens.png)
+<sub>Rendered from the actual firmware drawing code by [tools/ui_preview](tools/ui_preview), using sample data.</sub>
+
 <p align="center">
-  <img src="docs/photo.jpg" alt="The dashboard running on an ESP32 Cheap Yellow Display, showing the clock page" width="560">
+  <img src="docs/photo.jpg" alt="The dashboard running on an ESP32 Cheap Yellow Display" width="480">
 </p>
 
 ## Features
 
-- **Three pages, tap to switch:** an overview of all stats, rolling 2.5-minute CPU/memory graphs, and a big clock
-- **NVIDIA GPU usage and temperature**, read through NVIDIA's driver library (NVML)
-- **Status LED** on the board glows green, yellow or red with CPU load
-- **Flicker-free drawing:** each frame is rendered off-screen and pushed in one go
-- **Plug and play:** finds the board automatically, waits if it isn't plugged in, and reconnects if it's unplugged
+- **Five pages:** overview gauges, GPU details, CPU/GPU/RAM history, network graphs and a clock. Tap the right side of the screen to go forward and the left side to go back. The page is remembered after a restart.
+- **NVIDIA GPU details:** load, temperature, VRAM, power draw and fan speed, read through NVIDIA's driver library (NVML)
+- **Smooth animation:** gauges and bars glide to each new reading instead of jumping
+- **Full-colour, anti-aliased graphics** without flicker, drawn in strips so a full frame fits in the ESP32's limited RAM
+- **Plug and play:** the PC script finds the board automatically, waits if it isn't plugged in, and reconnects if it's unplugged
+- **Status LED** glows green, yellow or red with CPU load, and the screen dims when the PC goes away
 - **Windows launcher** that installs the Python dependencies on first run
 - **Second, smaller build** for an Arduino Nano with a 0.91" OLED
-
-![The three dashboard pages: overview, history and clock](docs/preview.png)
 
 ## Quick start
 
@@ -54,7 +56,7 @@ The screen should then say **Waiting for PC...**
   python3 pc_stats.py
   ```
 
-The dashboard comes alive within a couple of seconds. Tap the screen to switch pages.
+The dashboard comes alive within a couple of seconds. Tap the right or left side of the screen to switch pages.
 
 ## Hardware
 
@@ -62,7 +64,7 @@ The dashboard comes alive within a couple of seconds. Tap the screen to switch p
 |---|---|---|
 | Board | ESP32-2432S028 "Cheap Yellow Display" | Arduino Nano (ATmega328P) |
 | Screen | 2.8" 320×240 colour touchscreen | 0.91" 128×32 monochrome OLED |
-| Shows | CPU, memory, disk, GPU + temp, network, history graphs, clock | CPU, memory, time |
+| Shows | CPU, memory, disk, GPU (load, temp, VRAM, power, fan), network, history graphs, clock | CPU, memory, time |
 | Wiring | None, everything is on the board | 4 jumper wires |
 | Approx. cost | ~£10–15 | ~£5 |
 
@@ -76,6 +78,7 @@ CYD boards are sold in a few variants. The start screen shows red, green and blu
 | The "R" swatch looks blue | `SWAP_RED_BLUE` → `true` |
 | Blank screen (common on single-USB boards) | `PANEL_ST7789` → `0` (uses the ILI9341 driver) |
 | Upside down | `SCREEN_ROTATION` → `3` |
+| Tapping right goes back instead of forward | `TOUCH_FLIP_X` → `true` |
 
 The defaults work on the dual-USB (USB-C + micro-USB) board shown in the photo.
 
@@ -97,31 +100,55 @@ The defaults work on the dual-USB (USB-C + micro-USB) board shown in the photo.
 ```
 +-------------------------+   USB serial, 115200 baud    +-------------------------+
 |  PC: host/pc_stats.py   | ---------------------------> |  ESP32 / Arduino        |
-|  psutil + NVML          |   one CSV line per second    |  parse line -> redraw   |
+|  psutil + NVML          |   one text line per second   |  parse line -> redraw   |
 +-------------------------+                              +-------------------------+
 ```
 
 **PC side (`host/pc_stats.py`)**
 - `StatsCollector` reads CPU, memory and disk with [psutil](https://github.com/giampaolo/psutil). It works out network speed from the change in byte counters since the last reading.
-- `GpuReader` reads NVIDIA GPU usage and temperature through NVML ([nvidia-ml-py](https://pypi.org/project/nvidia-ml-py/)). If that isn't available it falls back to `nvidia-smi`, and without an NVIDIA GPU it reports `-1` (shown as "n/a").
+- `GpuReader` reads NVIDIA GPU load, temperature, VRAM, power and fan speed through NVML ([nvidia-ml-py](https://pypi.org/project/nvidia-ml-py/)). If that isn't available it falls back to `nvidia-smi`. Anything the card doesn't report is left out, and the screen shows it as "--".
 - Each board has a small formatter function that turns a reading into its line format.
 - The main loop finds the board's USB-serial port by name (CH340, CP210x and so on), sends a line every second, and reconnects if the board disappears.
 
-**Board side (`firmware/`)**
-- Serial input is buffered into a fixed-size line buffer and parsed when a newline arrives. Lines that don't split into the expected number of fields are ignored.
-- The CYD draws each frame into a 320×240 8-bit sprite in RAM, then pushes it to the screen in one go, so there's no flicker.
-- If no data arrives for 5 seconds, the display goes back to the "Waiting for PC" screen.
+**Board side (`firmware/cyd_dashboard/`)**
+
+The CYD firmware is split so that only one file touches the hardware:
+
+| File | Job |
+|---|---|
+| `cyd_dashboard.ino` | Display, touch and backlight setup, serial input, the main loop |
+| `dashboard_data.h` | The stats model, history ring buffers and the protocol parser. Plain C++, no hardware. |
+| `dashboard_ui.h` | Everything that gets drawn: theme, widgets (ring gauges, bars, area graphs) and the five pages |
+
+- **Rendering:** a full 320×240 frame at 16-bit colour needs 150 KB, more than the ESP32 has free in one block. So each frame is drawn twice into a 320×120 sprite (75 KB), once per half of the screen, and each half is pushed to the display in one go. Pages draw through a `Canvas` that shifts coordinates into the current strip, so page code never has to know about strips.
+- **Animation:** displayed values move a fraction of the way to the latest reading on each frame (about 30 fps), and the screen only redraws while something is changing.
+- **Robustness:** serial input goes into a fixed 256-byte line buffer, and invalid lines are dropped. If no data arrives for 5 seconds, the display goes back to the "Waiting for PC" screen, and it dims after a minute.
+
+Because the drawing code doesn't depend on the hardware, [tools/ui_preview](tools/ui_preview) builds it on a normal PC with LovyanGFX's desktop back end and renders each page to PNG. The screenshots above come from it, and CI runs it on every push.
 
 ### Serial protocol
 
 Both boards use plain text, so you can test a display without the PC script by typing a line into the Arduino Serial Monitor (115200 baud, newline line ending).
 
-| Board | Format | Example |
-|---|---|---|
-| CYD | `cpu,ram,gpu,gpuTemp,downKBs,upKBs,disk,HH:MM,date` | `37,61,72,64,12697,380,48,14:12,Wed 28 Oct` |
-| Nano | `cpu,ram,HH:MM` | `37,61,14:12` |
+**CYD:** comma-separated `key=value` pairs. The firmware ignores keys it doesn't know and treats missing keys as unknown, so new stats can be added on one side without breaking the other. Only `cpu` is required.
 
-`gpu` and `gpuTemp` are `-1` when no NVIDIA GPU is found.
+```
+cpu=37,cpun=16,ram=61,ramu=9984,ramt=16310,gpu=72,gput=64,vram=3120,vramt=8192,gpw=145.5,gpwl=215,fan=45,dn=12697,up=380,disk=48,t=14:12,d=Wed 28 Oct,gn=RTX 2070 SUPER
+```
+
+| Key | Meaning | Key | Meaning |
+|---|---|---|---|
+| `cpu` | CPU load % | `gpw` / `gpwl` | GPU power draw / limit, W |
+| `cpun` | CPU threads | `fan` | GPU fan % |
+| `ram` | Memory used % | `dn` / `up` | Network down / up, KB/s |
+| `ramu` / `ramt` | Memory used / total, MB | `disk` | System drive used % |
+| `gpu` | GPU load % | `t` | Time, `HH:MM` |
+| `gput` | GPU temperature, °C | `d` | Date text |
+| `vram` / `vramt` | VRAM used / total, MB | `gn` | GPU name |
+
+The original positional format (`cpu,ram,gpu,gpuTemp,down,up,disk,HH:MM,date`) is still accepted.
+
+**Nano:** `cpu,ram,HH:MM`, e.g. `37,61,14:12`
 
 ## Host script options
 
@@ -137,11 +164,12 @@ The Windows launchers pass extra options through, e.g. `run_dashboard.bat --port
 
 ## Adding your own stat
 
-As an example, here's how to show the number of running processes (`len(psutil.pids())`). You make one change on each side.
+As an example, here's how to show the number of running processes (`len(psutil.pids())`). Because the protocol uses named keys, each side is a small, separate change.
 
-1. **PC side:** add a field to the `Stats` dataclass in `pc_stats.py`, fill it in `StatsCollector.read()`, and append it in `format_cyd()`.
-2. **Board side:** in `cyd_dashboard.ino`, add the value to `struct Stats`, raise the field count in `parseLine()` (the `f[9]` array, the `n < 9` loop limit and the `n != 9` check), read the new field, and draw it in one of the `draw...()` page functions.
-3. Update `test_cyd_line` in `host/test_pc_stats.py` to match the new format.
+1. **PC side:** add a `procs` field to the `Stats` dataclass in `host/pc_stats.py`, fill it in `StatsCollector.read()`, and add `("procs", s.procs)` to the list in `format_cyd()`.
+2. **Board side:** add `float procs;` to `Metrics` in `dashboard_data.h` (and set it to `-1` in `clear()`), then add `{"procs", &Metrics::procs}` to the key table in `setField()`.
+3. **Draw it** in one of the page functions in `dashboard_ui.h`, then check how it looks by running `tools/ui_preview`. You don't need to upload anything to do that.
+4. Update `test_all_fields` in `host/test_pc_stats.py`.
 
 ## Troubleshooting
 
@@ -158,7 +186,10 @@ As an example, here's how to show the number of running processes (`len(psutil.p
 
 ```
 firmware/
-  cyd_dashboard/cyd_dashboard.ino        ESP32 CYD touchscreen dashboard
+  cyd_dashboard/
+    cyd_dashboard.ino                    ESP32 CYD: hardware setup, serial, main loop
+    dashboard_ui.h                       Drawing: theme, widgets, pages
+    dashboard_data.h                     Stats model, history, protocol parser
   nano_oled_ticker/nano_oled_ticker.ino  Arduino Nano + SSD1306 OLED ticker
 host/
   pc_stats.py                            PC script: collects stats, talks to the board
@@ -166,21 +197,31 @@ host/
   run_dashboard.bat                      Windows launcher for the CYD
   run_nano_ticker.bat                    Windows launcher for the Nano
   requirements.txt
+tools/ui_preview/                        Builds the UI on a PC: renders screenshots, C++ tests
 docs/                                    Images for this README
-.github/workflows/build.yml              CI: compiles both sketches, runs tests
+.github/workflows/build.yml              CI: compiles, tests, renders screenshots
 ```
 
 ## Testing
 
 Every push is checked by [GitHub Actions](.github/workflows/build.yml):
-- Both sketches are compiled with `arduino-cli`, for the ESP32 and for the AVR Nano.
-- The host unit tests run on Linux and Windows with Python 3.9 and 3.13. They cover the serial line formats, the firmware's buffer size limit, and GPU detection with a simulated NVIDIA card.
+- **Firmware:** both sketches are compiled with `arduino-cli`, for the ESP32 and for the AVR Nano.
+- **Host:** the Python unit tests run on Linux and Windows with Python 3.9 and 3.13. They cover the line formats, the firmware's buffer limit, and GPU detection with a simulated NVIDIA card, including the NVML and `nvidia-smi` paths and unsupported values.
+- **Protocol:** C++ tests check the firmware's parser on valid, legacy, partial, malformed and over-long input. A line produced by the Python script is then piped into that same parser, so both sides are checked against each other.
+- **UI:** every page is rendered to PNG. The images are attached to each run as a download.
 
-To run the tests locally:
+To run them locally:
 
 ```bash
-cd host
-python -m unittest -v
+# Python tests
+cd host && python -m unittest -v
+
+# C++ protocol tests and screenshots (needs CMake and a C++17 compiler)
+cd tools/ui_preview
+git clone --depth 1 --branch 1.2.35 https://github.com/lovyan03/LovyanGFX.git
+cmake -S . -B build && cmake --build build -j
+./build/test_protocol
+./build/ui_preview .          # writes screen_*.png
 ```
 
 ## Roadmap
@@ -188,7 +229,7 @@ python -m unittest -v
 - [ ] Wi-Fi mode: send stats over UDP so the display only needs power
 - [ ] AMD/Intel GPU support (e.g. via LibreHardwareMonitor)
 - [ ] Per-core CPU load and CPU temperature
-- [ ] Touch-adjustable screen brightness
+- [ ] Touch-adjustable screen brightness and a night mode for the clock page
 - [ ] 3D-printed stand
 
 ## Built with
