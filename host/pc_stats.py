@@ -1,6 +1,6 @@
 """PC Stats Display - host script.
 
-Collects live stats from this computer and streams them over USB serial to the
+Collects live stats from this computer (CPU, RAM, NVIDIA GPU, network, disk, time) and streams them over USB serial to the
 desk display, one line per second.
 
     python pc_stats.py                     # CYD touchscreen dashboard (default)
@@ -52,7 +52,6 @@ BOARD_PORT_KEYWORDS = ("ch340", "ch341", "ch910", "cp210", "usb-serial", "usb se
                        "usbserial", "wch", "arduino")
 
 ROOT_DRIVE = os.path.abspath(os.sep)
-HAS_NVIDIA = shutil.which("nvidia-smi") is not None
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # hide nvidia-smi's console on Windows
 
 
@@ -73,19 +72,79 @@ class Stats:
     date: str       # "Wed 28 Oct"
 
 
-def gpu_stats():
-    """Returns (usage %, temperature C) for the first NVIDIA GPU, or (-1, -1)."""
-    if not HAS_NVIDIA:
-        return -1, -1
-    try:
+def find_nvidia_smi():
+    """nvidia-smi isn't always on PATH on Windows, so also check where drivers install it."""
+    candidates = [shutil.which("nvidia-smi")]
+    if os.name == "nt":
+        windir = os.environ.get("SystemRoot", r"C:\Windows")
+        progfiles = os.environ.get("ProgramFiles", r"C:\Program Files")
+        candidates += [os.path.join(windir, "System32", "nvidia-smi.exe"),
+                       os.path.join(progfiles, "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe")]
+    return next((c for c in candidates if c and os.path.isfile(c)), None)
+
+
+class GpuReader:
+    """Usage and temperature of the first NVIDIA GPU.
+
+    Uses NVML (NVIDIA's driver library, via the nvidia-ml-py package) when available:
+    it's fast and needs nothing on PATH. Falls back to calling nvidia-smi.
+    Reports -1 for both values when there's no NVIDIA GPU.
+    """
+
+    def __init__(self):
+        self.name = None      # e.g. "NVIDIA GeForce RTX 2070 SUPER"
+        self.source = None    # "NVML" or "nvidia-smi"
+        self._nvml = self._handle = self._smi = None
+        self._init_nvml() or self._init_smi()
+
+    def _init_nvml(self):
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            name = pynvml.nvmlDeviceGetName(handle)
+        except Exception:
+            return False
+        self._nvml, self._handle, self.source = pynvml, handle, "NVML"
+        self.name = name.decode() if isinstance(name, bytes) else name
+        return True
+
+    def _query_smi(self, fields, timeout):
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,temperature.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=2, creationflags=NO_WINDOW,
+            [self._smi, f"--query-gpu={fields}", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=timeout, creationflags=NO_WINDOW,
         ).stdout
-        util, temp = out.strip().splitlines()[0].split(",")
-        return int(util), int(temp)
-    except Exception:
+        return [v.strip() for v in out.strip().splitlines()[0].split(",")]
+
+    def _init_smi(self):
+        self._smi = find_nvidia_smi()
+        if not self._smi:
+            return False
+        try:
+            self.name = self._query_smi("name", timeout=10)[0]  # first call can be slow
+            self.source = "nvidia-smi"
+            return True
+        except Exception:
+            self._smi = None
+            return False
+
+    @property
+    def available(self):
+        return self.source is not None
+
+    def read(self):
+        """Returns (usage %, temperature C), or (-1, -1) if unavailable."""
+        try:
+            if self._handle is not None:
+                util = self._nvml.nvmlDeviceGetUtilizationRates(self._handle).gpu
+                temp = self._nvml.nvmlDeviceGetTemperature(self._handle,
+                                                           self._nvml.NVML_TEMPERATURE_GPU)
+                return int(util), int(temp)
+            if self._smi:
+                util, temp = self._query_smi("utilization.gpu,temperature.gpu", timeout=3)
+                return int(util), int(temp)
+        except Exception:
+            pass
         return -1, -1
 
 
@@ -93,6 +152,7 @@ class StatsCollector:
     """Takes one reading per call. Network speed is the change since the last call."""
 
     def __init__(self):
+        self.gpu = GpuReader()
         psutil.cpu_percent()  # the first reading is always 0, so take it now
         self._net = psutil.net_io_counters()
         self._t = time.monotonic()
@@ -111,7 +171,7 @@ class StatsCollector:
         except OSError:
             disk = 0
 
-        gpu, gpu_temp = gpu_stats()
+        gpu, gpu_temp = self.gpu.read()
         return Stats(
             cpu=cpu,
             ram=round(psutil.virtual_memory().percent),
@@ -194,8 +254,13 @@ def describe_open_error(port, err):
 def run(board, fixed_port=None):
     name, fmt = BOARDS[board]
     print(f"PC Stats Display -> {name}")
-    print("Press Ctrl+C to stop.\n")
     collector = StatsCollector()
+    gpu = collector.gpu
+    if gpu.available:
+        print(f"GPU: {gpu.name} (read via {gpu.source})")
+    else:
+        print("GPU: no NVIDIA GPU detected - the GPU tile will show n/a")
+    print("Press Ctrl+C to stop.\n")
     waiting_shown = False
 
     while True:

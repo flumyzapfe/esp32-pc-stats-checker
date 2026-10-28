@@ -18,9 +18,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-%PY% -c "import psutil, serial" >nul 2>nul
+%PY% -c "import psutil, serial, pynvml" >nul 2>nul
 if errorlevel 1 (
-    echo Installing required libraries ^(first run only^)...
+    echo Installing required libraries...
     %PY% -m pip install --user -r requirements.txt
     if errorlevel 1 (
         echo.

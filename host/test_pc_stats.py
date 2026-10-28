@@ -1,5 +1,9 @@
 """Unit tests for the host script's serial protocol. Run with:  python -m unittest"""
+import os
+import sys
+import types
 import unittest
+from unittest import mock
 
 import pc_stats
 from pc_stats import Stats
@@ -37,6 +41,61 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(0 <= s.ram <= 100)
         self.assertGreaterEqual(s.down_kbs, 0)
         self.assertRegex(s.clock, r"^\d\d:\d\d$")
+
+
+def fake_pynvml(util=42, temp=63, name=b"NVIDIA GeForce RTX 2070 SUPER", fail_init=False):
+    """A stand-in for the pynvml module, so GPU code can be tested without a GPU."""
+    m = types.ModuleType("pynvml")
+    m.NVML_TEMPERATURE_GPU = 0
+
+    def init():
+        if fail_init:
+            raise RuntimeError("NVML Shared Library Not Found")
+    m.nvmlInit = init
+    m.nvmlDeviceGetHandleByIndex = lambda i: "handle0"
+    m.nvmlDeviceGetName = lambda h: name
+    m.nvmlDeviceGetUtilizationRates = lambda h: types.SimpleNamespace(gpu=util, memory=10)
+    m.nvmlDeviceGetTemperature = lambda h, sensor: temp
+    return m
+
+
+class GpuTests(unittest.TestCase):
+    def test_reads_through_nvml(self):
+        with mock.patch.dict(sys.modules, {"pynvml": fake_pynvml()}):
+            gpu = pc_stats.GpuReader()
+        self.assertEqual((gpu.source, gpu.name), ("NVML", "NVIDIA GeForce RTX 2070 SUPER"))
+        self.assertEqual(gpu.read(), (42, 63))
+
+    def test_falls_back_to_nvidia_smi(self):
+        smi_output = {"name": "NVIDIA GeForce RTX 2070 SUPER\n",
+                      "utilization.gpu,temperature.gpu": "17, 51\n"}
+
+        def fake_run(cmd, **kw):
+            field = cmd[1].split("=", 1)[1]
+            return types.SimpleNamespace(stdout=smi_output[field])
+
+        with mock.patch.dict(sys.modules, {"pynvml": fake_pynvml(fail_init=True)}), \
+                mock.patch.object(pc_stats, "find_nvidia_smi", return_value="nvidia-smi"), \
+                mock.patch.object(pc_stats.subprocess, "run", side_effect=fake_run):
+            gpu = pc_stats.GpuReader()
+            self.assertEqual(gpu.source, "nvidia-smi")
+            self.assertEqual(gpu.read(), (17, 51))
+
+    def test_no_gpu_reports_minus_one(self):
+        with mock.patch.dict(sys.modules, {"pynvml": fake_pynvml(fail_init=True)}), \
+                mock.patch.object(pc_stats, "find_nvidia_smi", return_value=None):
+            gpu = pc_stats.GpuReader()
+        self.assertFalse(gpu.available)
+        self.assertEqual(gpu.read(), (-1, -1))
+
+    def test_finds_nvidia_smi_off_path_on_windows(self):
+        smi = r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+        with mock.patch.object(pc_stats.os, "name", "nt"), \
+                mock.patch.object(pc_stats.shutil, "which", return_value=None), \
+                mock.patch.dict(os.environ, {"ProgramFiles": r"C:\Program Files"}), \
+                mock.patch.object(pc_stats.os.path, "isfile", side_effect=lambda p: p == smi), \
+                mock.patch.object(pc_stats.os.path, "join", side_effect=lambda *a: "\\".join(a)):
+            self.assertEqual(pc_stats.find_nvidia_smi(), smi)
 
 
 class ArgTests(unittest.TestCase):
