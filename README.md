@@ -95,10 +95,10 @@ The defaults work on the dual-USB (USB-C + micro-USB) board shown in the photo.
 ## How it works
 
 ```
-┌─────────────────────────┐   USB serial · 115200 baud   ┌─────────────────────────┐
-│  PC: host/pc_stats.py   │ ───────────────────────────► │  ESP32 / Arduino        │
-│  psutil · NVML          │   one CSV line per second    │  parse line → redraw    │
-└─────────────────────────┘                              └─────────────────────────┘
++-------------------------+   USB serial, 115200 baud    +-------------------------+
+|  PC: host/pc_stats.py   | ---------------------------> |  ESP32 / Arduino        |
+|  psutil + NVML          |   one CSV line per second    |  parse line -> redraw   |
++-------------------------+                              +-------------------------+
 ```
 
 **PC side (`host/pc_stats.py`)**
