@@ -2,14 +2,19 @@
 // https://github.com/flumyzapfe/esp32-pc-stats-checker
 //
 // Receives one line of stats per second from host/pc_stats.py over USB serial and
-// shows them on the 320x240 touchscreen. Tap the right half of the screen for the
-// next page, the left half for the previous one:
-//   Overview - CPU / GPU / RAM gauges, network and disk
-//   GPU      - load, temperature, VRAM, power draw, fan speed
-//   History  - 2.5-minute CPU, GPU and RAM graphs
-//   Network  - download and upload graphs
-//   Clock    - big clock with key stats
-// The page is remembered across restarts. The onboard RGB LED shows CPU load.
+// shows them on the 320x240 touchscreen as a "health tablet" for the PC:
+//   Overview  - CPU / GPU / RAM gauges, network and disk
+//   Health    - 0-100 health score and alerts (hot parts, full drives, stopped fans...)
+//   CPU       - temperature, clock, power, per-core load
+//   GPU       - load, temperature, hotspot, VRAM, power, fan, clocks
+//   Thermals  - every temperature sensor and fan speed
+//   Processes - top programs by CPU and memory
+//   Storage   - drive space, read/write speed, drive temperature and wear
+//   History   - 2.5-minute CPU, GPU and RAM graphs
+//   Network   - download and upload graphs
+//   Clock     - big clock with key stats
+// Touch: right half = next page, left half = previous, the title bar = page menu.
+// The page is remembered across restarts. The onboard RGB LED shows overall health.
 //
 // Files in this sketch:
 //   cyd_dashboard.ino  - hardware: display/touch setup, serial input, main loop (this file)
@@ -123,10 +128,11 @@ int stripH = 0;           // 0 = no sprite memory, draw straight to the screen
 ui::State st;
 Preferences prefs;
 
-char lineBuf[256];
+char lineBuf[LINE_MAX_LEN];
 size_t lineLen = 0;
 uint32_t lastData = 0, lastFrame = 0, lastTap = 0;
 bool wasTouched = false, dirty = true;
+int savedPage = -1;
 uint8_t brightness = 0;
 
 void setLed(bool r, bool g, bool b) {
@@ -135,10 +141,14 @@ void setLed(bool r, bool g, bool b) {
   digitalWrite(LED_B, b ? LOW : HIGH);
 }
 
-void showLoadOnLed(float cpu) {
-  if (cpu < 50) setLed(false, true, false);      // green
-  else if (cpu < 80) setLed(true, true, false);  // yellow
-  else setLed(true, false, false);               // red
+// LED: health score if the PC sends one, otherwise CPU load
+void updateLed(const Metrics& m) {
+  bool green, yellow;
+  if (m.hasHealth()) { green = m.healthScore >= 90; yellow = m.healthScore >= 70; }
+  else { green = m.cpu < 50; yellow = m.cpu < 80; }
+  if (green) setLed(false, true, false);
+  else if (yellow) setLed(true, true, false);
+  else setLed(true, false, false);
 }
 
 void setBacklight(uint8_t level) {
@@ -162,7 +172,7 @@ void render() {
 }
 
 void handleLine(char* line) {
-  Metrics m;
+  static Metrics m;  // ~1.3 KB, kept off the stack
   if (!proto::parseLine(line, m)) return;
   st.m = m;
   st.hist.add(m);
@@ -171,7 +181,7 @@ void handleLine(char* line) {
     st.connected = true;
   }
   lastData = millis();
-  showLoadOnLed(m.cpu);
+  updateLed(m);
   dirty = true;
 }
 
@@ -193,9 +203,20 @@ void readTouch() {
   bool touched = lcd.getTouch(&x, &y);
   if (touched && !wasTouched && millis() - lastTap > 250) {
     if (TOUCH_FLIP_X) x = ui::W - 1 - x;
-    int dir = (x >= ui::W / 2) ? 1 : -1;
-    st.page = (st.page + dir + ui::PAGE_COUNT) % ui::PAGE_COUNT;
-    prefs.putUChar("page", (uint8_t)st.page);
+    if (st.menuOpen) {                       // pick a page, or tap outside to close
+      int hit = ui::menuHit(x, y);
+      if (hit >= 0) st.page = hit;
+      st.menuOpen = false;
+    } else if (y < ui::HEADER_H) {           // title bar opens the page menu
+      st.menuOpen = st.connected;
+    } else {
+      int dir = (x >= ui::W / 2) ? 1 : -1;
+      st.page = (st.page + dir + ui::PAGE_COUNT) % ui::PAGE_COUNT;
+    }
+    if (st.page != savedPage) {              // save to flash only when it changes
+      savedPage = st.page;
+      prefs.putUChar("page", (uint8_t)savedPage);
+    }
     lastTap = millis();
     dirty = true;
   }
@@ -203,7 +224,7 @@ void readTouch() {
 }
 
 void setup() {
-  Serial.setRxBufferSize(1024);
+  Serial.setRxBufferSize(2048);  // lines are ~600 bytes and arrive while a frame is drawn
   Serial.begin(115200);
 
   pinMode(27, OUTPUT);  // backlight on some board revisions
@@ -225,7 +246,7 @@ void setup() {
   }
 
   prefs.begin("dashboard", false);
-  st.page = prefs.getUChar("page", 0) % ui::PAGE_COUNT;
+  st.page = savedPage = prefs.getUChar("page", 0) % ui::PAGE_COUNT;
 
   Serial.printf("PC Stats Dashboard ready (strip height %d)\n", stripH);
 }
@@ -246,7 +267,7 @@ void loop() {
   if (now - lastFrame >= FRAME_MS) {
     lastFrame = now;
     bool animating = st.connected && st.s.step(st.m);
-    if (dirty || animating || !st.connected) {  // the waiting screen has a spinner
+    if (dirty || animating || ui::needsAnimation(st)) {  // spinner, spinning fans
       st.ms = now;
       render();
       dirty = false;

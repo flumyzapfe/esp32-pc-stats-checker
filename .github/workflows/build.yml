@@ -58,9 +58,12 @@ jobs:
         run: pip install -r host/requirements.txt
       - name: Run unit tests
         working-directory: host
-        run: python -m unittest -v
-      - name: Check --help works
-        run: python host/pc_stats.py --help
+        run: python -m unittest discover -s tests -t . -v
+      - name: Check --help and --sensors work
+        working-directory: host
+        run: |
+          python pc_stats.py --help
+          python pc_stats.py --sensors
 
   ui:
     name: UI preview + protocol tests
@@ -82,7 +85,8 @@ jobs:
         working-directory: host
         run: |
           pip install -r requirements.txt
-          python -c "import pc_stats as p, test_pc_stats as t; print(p.format_cyd(t.SAMPLE), end='')" | ../build/test_protocol -
+          python -c "from pcstats.protocol import format_cyd; from tests.fixtures import SAMPLE; print(format_cyd(SAMPLE), end='')" | ../build/test_protocol -
+          python -c "import time; from pcstats.collector import StatsCollector; from pcstats.protocol import format_cyd; c = StatsCollector(); time.sleep(1); print(format_cyd(c.read()), end='')" | ../build/test_protocol -
       - name: Render every page
         run: |
           mkdir -p screens
