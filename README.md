@@ -180,6 +180,7 @@ As an example, here's how to show the number of running processes (`len(psutil.p
 | "In use by another program" | Close the Arduino IDE's Serial Monitor. Only one program can use the port at a time. |
 | GPU tile shows "n/a" | The startup message says whether a GPU was found. GPU stats need an NVIDIA card with its driver installed. |
 | Upload stalls on `Connecting...` | Hold the **BOOT** button on the board until the upload starts. |
+| Upload fails with "Could not open COMx... Access is denied" | The PC script is still using the port. Close its window, upload, then start it again. |
 | Colours or orientation look wrong | See [Display settings](#display-settings-cyd). |
 
 ## Project structure
