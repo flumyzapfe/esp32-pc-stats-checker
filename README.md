@@ -13,7 +13,7 @@ A Python script on the PC collects everything and streams it over USB. The displ
 <sub>Rendered from the actual firmware drawing code by [tools/ui_preview](tools/ui_preview), using sample data.</sub>
 
 <p align="center">
-  <img src="docs/photo.jpg" alt="The dashboard running on an ESP32 Cheap Yellow Display" width="440">
+  <img src="docs/photo.jpg" alt="The page menu running on an ESP32 Cheap Yellow Display" width="480">
 </p>
 
 ## Features
