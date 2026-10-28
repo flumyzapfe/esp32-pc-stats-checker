@@ -117,12 +117,12 @@ static const Font* F_LARGE = &fonts::DejaVu24;
 static const Font* F_HUGE  = &fonts::DejaVu40;
 static const Font* F_CLOCK = &fonts::DejaVu72;
 
-static const Datum TL = textdatum_t::top_left;
-static const Datum ML = textdatum_t::middle_left;
-static const Datum MC = textdatum_t::middle_center;
-static const Datum MR = textdatum_t::middle_right;
-static const Datum BL = textdatum_t::baseline_left;
-static const Datum BR = textdatum_t::baseline_right;
+static const Datum D_TL = textdatum_t::top_left;
+static const Datum D_ML = textdatum_t::middle_left;
+static const Datum D_MC = textdatum_t::middle_center;
+static const Datum D_MR = textdatum_t::middle_right;
+static const Datum D_BL = textdatum_t::baseline_left;
+static const Datum D_BR = textdatum_t::baseline_right;
 
 // ---------------------------------------------------------------------------
 // UI state
@@ -200,9 +200,9 @@ inline void pageDots(Canvas& c, int page, int y) {
 
 inline void header(Canvas& c, const State& st, const char* title, uint32_t accent) {
   c.circle(14, 14, 3, accent);
-  c.text(title, 24, 14, F_SMALL, TEXT, ML);
+  c.text(title, 24, 14, F_SMALL, TEXT, D_ML);
   pageDots(c, st.page, 14);
-  c.text(st.m.time, W - 12, 14, F_SMALL, DIM, MR);
+  c.text(st.m.time, W - 12, 14, F_SMALL, DIM, D_MR);
 }
 
 // Temperature like "64°C". The fonts have no degree sign, so it's drawn as a small ring.
@@ -217,12 +217,12 @@ inline void tempText(Canvas& c, float t, int x, int y, const Font* f, uint32_t c
   int dr = fh / 6 < 2 ? 2 : fh / 6;    // degree ring radius
   int dw = 2 * dr + 4;                  // space it takes up
   int total = wn + dw + wc;
-  int left = (d == MC) ? x - total / 2 : (d == MR) ? x - total : x;
-  c.text(num, left, y, f, col, ML);
+  int left = (d == D_MC) ? x - total / 2 : (d == D_MR) ? x - total : x;
+  c.text(num, left, y, f, col, D_ML);
   int ry = y - fh / 2 + dr + 2;        // level with the top of the digits
   c.ring(left + wn + 2 + dr, ry, dr, col);
   if (dr >= 3) c.ring(left + wn + 2 + dr, ry, dr - 1, col);  // 2 px thick on bigger text
-  c.text("C", left + wn + dw, y, f, col, ML);
+  c.text("C", left + wn + dw, y, f, col, D_ML);
 }
 
 inline void card(Canvas& c, int x, int y, int w, int h) { c.rrect(x, y, w, h, 8, CARD); }
@@ -291,10 +291,10 @@ inline void graphCard(Canvas& c, int x, int y, int w, int h, const char* label, 
                       const char* note, int count, F valueAt, uint32_t col) {
   card(c, x, y, w, h);
   areaGraph(c, x + 2, y + 20, w - 4, h - 22, count, HISTORY_LEN, valueAt, col, CARD);
-  c.text(label, x + 10, y + 11, F_SMALL, col, ML);
+  c.text(label, x + 10, y + 11, F_SMALL, col, D_ML);
   int lw = c.textWidth(label, F_SMALL);
-  c.text(value, x + 16 + lw, y + 11, F_SMALL, TEXT, ML);
-  if (note) c.text(note, x + w - 10, y + 11, F_TINY, DIM, MR);
+  c.text(value, x + 16 + lw, y + 11, F_SMALL, TEXT, D_ML);
+  if (note) c.text(note, x + w - 10, y + 11, F_TINY, DIM, D_MR);
 }
 
 // ---------------------------------------------------------------------------
@@ -305,9 +305,9 @@ inline void gaugeWithLabels(Canvas& c, int cx, int cy, int r, float shown, float
   ring(c, cx, cy, r, 9, shown, loadColor(actual, col));
   char v[8];
   fmtPct(v, sizeof(v), actual);
-  c.text(v, cx, cy - 1, F_LARGE, TEXT, MC);
-  c.text(label, cx, cy + r - 8, F_TINY, DIM, MC);  // sits in the gap at the bottom of the ring
-  if (sub) c.text(sub, cx, cy + r + 13, F_SMALL, subCol, MC);
+  c.text(v, cx, cy - 1, F_LARGE, TEXT, D_MC);
+  c.text(label, cx, cy + r - 8, F_TINY, DIM, D_MC);  // sits in the gap at the bottom of the ring
+  if (sub) c.text(sub, cx, cy + r + 13, F_SMALL, subCol, D_MC);
 }
 
 inline void pageOverview(Canvas& c, const State& st) {
@@ -321,7 +321,7 @@ inline void pageOverview(Canvas& c, const State& st) {
   gaugeWithLabels(c, 56, 88, 44, st.s.cpu, m.cpu, C_CPU, "CPU", sub, DIM);
 
   gaugeWithLabels(c, 160, 88, 44, st.s.gpu, m.gpu, C_GPU, "GPU", m.hasGpu() ? nullptr : "n/a", DIM);
-  if (m.hasGpu()) tempText(c, m.gpuTemp, 160, 88 + 44 + 13, F_SMALL, tempColor(m.gpuTemp), MC);
+  if (m.hasGpu()) tempText(c, m.gpuTemp, 160, 88 + 44 + 13, F_SMALL, tempColor(m.gpuTemp), D_MC);
 
   if (m.ramUsedMB >= 0 && m.ramTotalMB > 0)
     snprintf(sub, sizeof(sub), "%.1f / %.0f GB", m.ramUsedMB / 1024, m.ramTotalMB / 1024);
@@ -331,14 +331,14 @@ inline void pageOverview(Canvas& c, const State& st) {
   // Network card with a mini graph
   const int cy = 166, ch = 66;
   card(c, 8, cy, 200, ch);
-  c.text("NETWORK", 18, cy + 13, F_TINY, DIM, ML);
+  c.text("NETWORK", 18, cy + 13, F_TINY, DIM, D_ML);
   char r[16];
   fmtRate(r, sizeof(r), m.downKBs);
   arrow(c, 22, cy + 34, true, C_DOWN);
-  c.text(r, 32, cy + 34, F_MED, TEXT, ML);
+  c.text(r, 32, cy + 34, F_MED, TEXT, D_ML);
   fmtRate(r, sizeof(r), m.upKBs);
   arrow(c, 22, cy + 53, false, C_UP);
-  c.text(r, 32, cy + 53, F_SMALL, DIM, ML);
+  c.text(r, 32, cy + 53, F_SMALL, DIM, D_ML);
 
   const History& h = st.hist;
   const int spark = 36;  // samples shown in the mini graph
@@ -356,10 +356,10 @@ inline void pageOverview(Canvas& c, const State& st) {
 
   // Disk card
   card(c, 216, cy, 96, ch);
-  c.text("DISK", 226, cy + 13, F_TINY, DIM, ML);
+  c.text("DISK", 226, cy + 13, F_TINY, DIM, D_ML);
   char d[8];
   fmtPct(d, sizeof(d), m.disk);
-  c.text(d, 226, cy + 35, F_LARGE, TEXT, ML);
+  c.text(d, 226, cy + 35, F_LARGE, TEXT, D_ML);
   bar(c, 226, cy + 52, 76, 6, st.s.disk, loadColor(m.disk, C_DISK));
 
 }
@@ -367,8 +367,8 @@ inline void pageOverview(Canvas& c, const State& st) {
 // One labelled row with a value on the right and a bar underneath
 inline void statRow(Canvas& c, int x, int y, int w, const char* label, const char* value,
                     float barPct, uint32_t col) {
-  c.text(label, x, y + 9, F_TINY, DIM, ML);
-  c.text(value, x + w, y + 9, F_MED, TEXT, MR);
+  c.text(label, x, y + 9, F_TINY, DIM, D_ML);
+  c.text(value, x + w, y + 9, F_MED, TEXT, D_MR);
   bar(c, x, y + 24, w, 6, barPct, col, CARD);
 }
 
@@ -376,8 +376,8 @@ inline void pageGpu(Canvas& c, const State& st) {
   const Metrics& m = st.m;
   header(c, st, "GPU", C_GPU);
   if (!m.hasGpu()) {
-    c.text("No NVIDIA GPU detected", W / 2, 110, F_MED, TEXT, MC);
-    c.text("GPU stats need an NVIDIA card and driver", W / 2, 138, F_SMALL, DIM, MC);
+    c.text("No NVIDIA GPU detected", W / 2, 110, F_MED, TEXT, D_MC);
+    c.text("GPU stats need an NVIDIA card and driver", W / 2, 138, F_SMALL, DIM, D_MC);
       return;
   }
 
@@ -386,15 +386,15 @@ inline void pageGpu(Canvas& c, const State& st) {
   ring(c, gx, gy, gr, 12, st.s.gpu, loadColor(m.gpu, C_GPU));
   char v[24];
   fmtPct(v, sizeof(v), m.gpu);
-  c.text(v, gx, gy - 2, F_HUGE, TEXT, MC);
-  c.text("LOAD", gx, gy + gr - 12, F_TINY, DIM, MC);
-  if (m.gpuName[0]) c.text(m.gpuName, gx, 210, F_SMALL, DIM, MC);
+  c.text(v, gx, gy - 2, F_HUGE, TEXT, D_MC);
+  c.text("LOAD", gx, gy + gr - 12, F_TINY, DIM, D_MC);
+  if (m.gpuName[0]) c.text(m.gpuName, gx, 210, F_SMALL, DIM, D_MC);
 
   // Detail rows
   const int x = 172, w = 138;
   card(c, x - 10, 32, w + 20, 188);
   statRow(c, x, 40, w, "TEMP", "", st.s.gpuTemp, tempColor(m.gpuTemp));
-  tempText(c, m.gpuTemp, x + w, 40 + 9, F_MED, TEXT, MR);
+  tempText(c, m.gpuTemp, x + w, 40 + 9, F_MED, TEXT, D_MR);
 
   if (m.vramUsedMB >= 0 && m.vramTotalMB > 0)
     snprintf(v, sizeof(v), "%.1f/%.0f GB", m.vramUsedMB / 1024, m.vramTotalMB / 1024);
@@ -458,15 +458,15 @@ inline void pageNetwork(Canvas& c, const State& st) {
 inline void miniStat(Canvas& c, int x, int y, int w, const char* label, const char* value,
                      float barPct, uint32_t col) {
   card(c, x, y, w, 48);
-  c.text(label, x + w / 2, y + 11, F_TINY, DIM, MC);
-  c.text(value, x + w / 2, y + 27, F_MED, TEXT, MC);
+  c.text(label, x + w / 2, y + 11, F_TINY, DIM, D_MC);
+  c.text(value, x + w / 2, y + 27, F_MED, TEXT, D_MC);
   bar(c, x + 8, y + 39, w - 16, 4, barPct, col);
 }
 
 inline void pageClock(Canvas& c, const State& st) {
   const Metrics& m = st.m;
-  c.text(m.time, W / 2, 78, F_CLOCK, TEXT, MC);
-  c.text(m.date, W / 2, 132, F_MED, DIM, MC);
+  c.text(m.time, W / 2, 78, F_CLOCK, TEXT, D_MC);
+  c.text(m.date, W / 2, 132, F_MED, DIM, D_MC);
 
   char v[12];
   const int y = 168, w = 72, gap = 6, x0 = (W - (4 * w + 3 * gap)) / 2;
@@ -477,21 +477,21 @@ inline void pageClock(Canvas& c, const State& st) {
   fmtPct(v, sizeof(v), m.ram);
   miniStat(c, x0 + 2 * (w + gap), y, w, "RAM", v, st.s.ram, C_RAM);
   miniStat(c, x0 + 3 * (w + gap), y, w, "GPU TEMP", "", st.s.gpuTemp, tempColor(m.gpuTemp));
-  tempText(c, m.gpuTemp, x0 + 3 * (w + gap) + w / 2, y + 27, F_MED, TEXT, MC);
+  tempText(c, m.gpuTemp, x0 + 3 * (w + gap) + w / 2, y + 27, F_MED, TEXT, D_MC);
 
   pageDots(c, st.page, 230);
 }
 
 inline void pageWaiting(Canvas& c, const State& st) {
-  c.text("PC Stats", W / 2, 52, F_LARGE, TEXT, MC);
+  c.text("PC Stats", W / 2, 52, F_LARGE, TEXT, D_MC);
 
   // Spinner: a short arc going round
   float a = (st.ms % 1200) * 0.3f;
   c.arc(W / 2, 108, 14, 18, 0, 360, CARD);
   c.arc(W / 2, 108, 14, 18, a, a + 90, C_CPU);
 
-  c.text("Waiting for PC...", W / 2, 150, F_MED, TEXT, MC);
-  c.text("Start pc_stats.py on your computer", W / 2, 174, F_SMALL, DIM, MC);
+  c.text("Waiting for PC...", W / 2, 150, F_MED, TEXT, D_MC);
+  c.text("Start pc_stats.py on your computer", W / 2, 174, F_SMALL, DIM, D_MC);
 
   // Colour check: these should read red, green, blue (see settings in the .ino)
   static const uint32_t sw[3] = {0xFF0000, 0x00FF00, 0x0000FF};
@@ -499,7 +499,7 @@ inline void pageWaiting(Canvas& c, const State& st) {
   for (int i = 0; i < 3; i++) {
     int x = W / 2 - 36 + i * 28;
     c.rrect(x, 204, 16, 16, 4, sw[i]);
-    c.text(names[i], x + 8, 229, F_TINY, DIM, MC);
+    c.text(names[i], x + 8, 229, F_TINY, DIM, D_MC);
   }
 }
 
