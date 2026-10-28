@@ -13,8 +13,11 @@
 //   History   - 2.5-minute CPU, GPU and RAM graphs
 //   Network   - download and upload graphs
 //   Clock     - big clock with key stats
-// Touch: right half = next page, left half = previous, the title bar = page menu.
-// The page is remembered across restarts. The onboard RGB LED shows overall health.
+// Touch: right half = next page, left half = previous. Tap the title bar, or press and
+// hold anywhere, for the page menu. The page is remembered across restarts.
+// The touchscreen is calibrated on first start (tap the four corner arrows); hold a
+// finger on the screen while plugging in, or use the menu, to calibrate again.
+// The onboard RGB LED shows overall health.
 //
 // Files in this sketch:
 //   cyd_dashboard.ino  - hardware: display/touch setup, serial input, main loop (this file)
@@ -36,11 +39,11 @@
 #define INVERT_COLORS   false  // flip to true if the background is white instead of black
 #define SWAP_RED_BLUE   false  // flip to true if the "R" swatch on the start screen looks blue
 #define SCREEN_ROTATION 1      // 1 or 3 = landscape. Try 3 if upside down
-#define TOUCH_FLIP_X    false  // flip to true if tapping right goes back instead of forward
 
 #define DATA_TIMEOUT_MS 5000   // show "Waiting for PC" if no data for this long
 #define DIM_AFTER_MS    60000  // dim the backlight after this long without data
 #define FRAME_MS        33     // ~30 fps while animating
+#define LONG_PRESS_MS   650    // press and hold this long to open the page menu
 
 // RGB LED pins (the LED lights when a pin is LOW). If "green" shows as blue, swap G and B.
 const int LED_R = 4, LED_G = 16, LED_B = 17;
@@ -131,7 +134,11 @@ Preferences prefs;
 char lineBuf[LINE_MAX_LEN];
 size_t lineLen = 0;
 uint32_t lastData = 0, lastFrame = 0, lastTap = 0;
-bool wasTouched = false, dirty = true;
+bool dirty = true;
+// Touch state: a tap acts when the finger lifts, a long press while it's still down
+bool pressing = false, longFired = false, wantCalibration = false;
+uint32_t pressStart = 0, lastSeen = 0;
+int32_t pressX = 0, pressY = 0;
 int savedPage = -1;
 uint8_t brightness = 0;
 
@@ -198,29 +205,82 @@ void readSerial() {
   }
 }
 
-void readTouch() {
-  int32_t x, y;
-  bool touched = lcd.getTouch(&x, &y);
-  if (touched && !wasTouched && millis() - lastTap > 250) {
-    if (TOUCH_FLIP_X) x = ui::W - 1 - x;
-    if (st.menuOpen) {                       // pick a page, or tap outside to close
+// Four-corner touch calibration. LovyanGFX shows an arrow in each corner in turn;
+// the result is saved so it only has to be done once.
+void calibrateTouch(bool force) {
+  uint16_t cal[8];
+  if (!force && prefs.getBytesLength("touchcal") == sizeof(cal)) {
+    prefs.getBytes("touchcal", cal, sizeof(cal));
+    lcd.setTouchCalibrate(cal);
+    return;
+  }
+  lcd.fillScreen(ui::BG);
+  lcd.setTextDatum(textdatum_t::middle_center);
+  lcd.setFont(&fonts::DejaVu18);
+  lcd.setTextColor(ui::TEXT);
+  lcd.drawString("Touch setup", ui::W / 2, ui::H / 2 - 22);
+  lcd.setFont(&fonts::DejaVu12);
+  lcd.setTextColor(ui::DIM);
+  lcd.drawString("Tap each corner arrow as it appears", ui::W / 2, ui::H / 2 + 4);
+  lcd.drawString("(a fingernail or stylus works best)", ui::W / 2, ui::H / 2 + 22);
+  lcd.calibrateTouch(cal, ui::C_CPU, ui::BG, 16);  // waits for all four taps
+  lcd.setTouchCalibrate(cal);
+  prefs.putBytes("touchcal", cal, sizeof(cal));
+  lastData = millis();  // don't drop to "waiting" just because calibration took a while
+  dirty = true;
+}
+
+void savePage() {
+  if (st.page != savedPage) {  // write flash only when the page changes
+    savedPage = st.page;
+    prefs.putUChar("page", (uint8_t)savedPage);
+  }
+}
+
+void handleTap(int32_t x, int32_t y) {
+  if (st.menuOpen) {                           // pick a page, recalibrate, or close
+    if (ui::menuCalibrateHit(x, y)) wantCalibration = true;
+    else {
       int hit = ui::menuHit(x, y);
       if (hit >= 0) st.page = hit;
-      st.menuOpen = false;
-    } else if (y < ui::HEADER_H) {           // title bar opens the page menu
-      st.menuOpen = st.connected;
-    } else {
-      int dir = (x >= ui::W / 2) ? 1 : -1;
-      st.page = (st.page + dir + ui::PAGE_COUNT) % ui::PAGE_COUNT;
     }
-    if (st.page != savedPage) {              // save to flash only when it changes
-      savedPage = st.page;
-      prefs.putUChar("page", (uint8_t)savedPage);
+    st.menuOpen = false;
+  } else if (y < ui::HEADER_H && st.connected) {  // title bar opens the page menu
+    st.menuOpen = true;
+  } else {
+    int dir = (x >= ui::W / 2) ? 1 : -1;
+    st.page = (st.page + dir + ui::PAGE_COUNT) % ui::PAGE_COUNT;
+  }
+  savePage();
+}
+
+void readTouch() {
+  int32_t x, y;
+  uint32_t now = millis();
+  if (lcd.getTouch(&x, &y)) {
+    lastSeen = now;
+    if (!pressing) {                           // finger down
+      pressing = true;
+      longFired = false;
+      pressStart = now;
+      pressX = x;
+      pressY = y;
+      st.tapX = x;                             // show where the touch landed
+      st.tapY = y;
+      st.tapMs = now;
+      lastTap = now;
+      dirty = true;
+    } else if (!longFired && now - pressStart >= LONG_PRESS_MS) {  // long press
+      longFired = true;
+      st.menuOpen = st.connected && !st.menuOpen;
+      dirty = true;
     }
-    lastTap = millis();
+  } else if (pressing && now - lastSeen > 60) {  // finger up (ignoring brief dropouts)
+    pressing = false;
+    if (!longFired) handleTap(pressX, pressY);
+    lastTap = now;
     dirty = true;
   }
-  wasTouched = touched;
 }
 
 void setup() {
@@ -248,12 +308,21 @@ void setup() {
   prefs.begin("dashboard", false);
   st.page = savedPage = prefs.getUChar("page", 0) % ui::PAGE_COUNT;
 
+  // Calibrate on first start, or if a finger is on the screen while it powers up
+  int32_t tx, ty;
+  bool held = lcd.getTouch(&tx, &ty);
+  calibrateTouch(held);
+
   Serial.printf("PC Stats Dashboard ready (strip height %d)\n", stripH);
 }
 
 void loop() {
   readSerial();
   readTouch();
+  if (wantCalibration) {
+    wantCalibration = false;
+    calibrateTouch(true);
+  }
 
   uint32_t now = millis();
   if (st.connected && now - lastData > DATA_TIMEOUT_MS) {

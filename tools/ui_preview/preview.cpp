@@ -104,6 +104,11 @@ static int renderSamples(const std::string& out) {
   st.page = ui::PAGE_THERMALS;
   st.menuOpen = true;
   failures += !renderPng(st, out + "/screen_menu.png");
+  st.menuOpen = false;
+  st.page = ui::PAGE_OVERVIEW;
+  st.tapX = 250; st.tapY = 120; st.tapMs = st.ms - 120;  // a tap 120 ms ago
+  failures += !renderPng(st, out + "/screen_tap.png");
+  st.tapMs = 0;
   ui::State waiting;
   waiting.ms = 200;
   failures += !renderPng(waiting, out + "/screen_waiting.png");

@@ -194,6 +194,8 @@ struct State {
   bool menuOpen = false;
   bool connected = false;
   uint32_t ms = 0;  // milliseconds since boot, for spinners and fan animation
+  int tapX = 0, tapY = 0;   // where the last touch landed, shown as a fading ring
+  uint32_t tapMs = 0;
 
   State() { m.clear(); }
 };
@@ -1014,6 +1016,12 @@ inline void menuTile(int i, int& x, int& y, int& w, int& h) {
   y = MENU_Y + (i / MENU_COLS) * (h + MENU_GAP);
 }
 
+// The "Touch setup" button in the menu's title bar
+static const int CAL_BTN_X = 214, CAL_BTN_W = 98;
+inline bool menuCalibrateHit(int px, int py) {
+  return py < HEADER_H && px >= CAL_BTN_X - 6;
+}
+
 // Which page tile is at (x, y), or -1
 inline int menuHit(int px, int py) {
   for (int i = 0; i < PAGE_COUNT; i++) {
@@ -1026,7 +1034,8 @@ inline int menuHit(int px, int py) {
 
 inline void pageMenu(Canvas& c, const State& st) {
   c.text("Pages", 14, 14, F_SMALL, TEXT, D_ML);
-  c.text("tap a page", W - 12, 14, F_TINY, DIM, D_MR);
+  c.rrect(CAL_BTN_X, 4, CAL_BTN_W, 20, 10, CARD);
+  c.text("Touch setup", CAL_BTN_X + CAL_BTN_W / 2, 14, F_TINY, DIM, D_MC);
   for (int i = 0; i < PAGE_COUNT; i++) {
     int x, y, w, h;
     menuTile(i, x, y, w, h);
@@ -1059,8 +1068,22 @@ inline void pageWaiting(Canvas& c, const State& st) {
   }
 }
 
+static const uint32_t TAP_RING_MS = 350;
+
+// Fading ring where the screen was touched, so it's clear where taps land
+inline void tapRing(Canvas& c, const State& st) {
+  uint32_t age = st.ms - st.tapMs;
+  if (st.tapMs == 0 || age >= TAP_RING_MS) return;
+  float t = age / (float)TAP_RING_MS;
+  uint32_t col = mix(TEXT, BG, t);
+  int r = 8 + (int)(t * 14);
+  c.ring(st.tapX, st.tapY, r, col);
+  c.ring(st.tapX, st.tapY, r - 1, col);
+}
+
 // True if the current screen has something moving even without new data
 inline bool needsAnimation(const State& st) {
+  if (st.tapMs != 0 && st.ms - st.tapMs < TAP_RING_MS) return true;
   if (!st.connected) return true;  // spinner
   if (st.menuOpen) return false;
   if (st.page == PAGE_THERMALS)
@@ -1069,8 +1092,7 @@ inline bool needsAnimation(const State& st) {
 }
 
 // Draws the whole screen (or the part of it inside this canvas's strip)
-inline void drawFrame(Canvas& c, const State& st) {
-  c.clear(BG);
+inline void drawPage(Canvas& c, const State& st) {
   if (!st.connected) { pageWaiting(c, st); return; }
   if (st.menuOpen) { pageMenu(c, st); return; }
   switch (st.page) {
@@ -1085,6 +1107,12 @@ inline void drawFrame(Canvas& c, const State& st) {
     case PAGE_NETWORK:   pageNetwork(c, st); break;
     default:             pageClock(c, st); break;
   }
+}
+
+inline void drawFrame(Canvas& c, const State& st) {
+  c.clear(BG);
+  drawPage(c, st);
+  tapRing(c, st);
 }
 
 }  // namespace ui

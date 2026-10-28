@@ -18,7 +18,7 @@ A Python script on the PC collects everything and streams it over USB. The displ
 
 ## Features
 
-- **Ten pages:** overview, health, CPU, GPU, thermals, processes, storage, history, network and clock. Tap the right or left side of the screen to go forward or back, or tap the title bar for a menu of every page. The display remembers your page after a restart.
+- **Ten pages:** overview, health, CPU, GPU, thermals, processes, storage, history, network and clock. Tap the right or left side of the screen to go forward or back. Tap the title bar, or press and hold anywhere, for a menu of every page. The display remembers your page after a restart.
 - **Health score and alerts:** the PC checks temperatures, memory, drive space and wear, fans and sustained load. It gives a 0–100 score with a reason for every lost point, and lists the checks that passed. The score shows on every page, and the board's LED glows green, yellow or red to match.
 - **Thermals:** CPU package and per-core temperatures, GPU core and hotspot, motherboard and VRM sensors, and drive temperatures. Fans are listed with their RPM and an icon that spins at a matching speed.
 - **CPU and GPU detail:** clocks, power draw, load on each core, VRAM, GPU fan. NVIDIA cards are read directly, and AMD and Intel graphics through LibreHardwareMonitor.
@@ -45,7 +45,7 @@ git clone https://github.com/flumyzapfe/esp32-pc-stats-checker.git
 3. Open `firmware/cyd_dashboard/cyd_dashboard.ino`. Two more tabs open with it; they're part of the sketch.
 4. Select board **ESP32 Dev Module** and your board's port, then click **Upload**. If it stalls on `Connecting...`, hold the **BOOT** button on the back of the board.
 
-The screen should then say **Waiting for PC...**
+On first start the board asks you to **tap four arrows**, one in each corner, to calibrate the touchscreen (a fingernail works best). Then the screen says **Waiting for PC...**
 
 **3. Turn on temperature and fan sensors (Windows, recommended).** Windows doesn't let normal programs read CPU temperatures or fan speeds, so the script gets them from [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor), a free, open-source monitoring tool.
 
@@ -117,7 +117,6 @@ CYD boards are sold in a few variants. The start screen shows red, green and blu
 | The "R" swatch looks blue | `SWAP_RED_BLUE` → `true` |
 | Blank screen (common on single-USB boards) | `PANEL_ST7789` → `0` (uses the ILI9341 driver) |
 | Upside down | `SCREEN_ROTATION` → `3` |
-| Tapping right goes back instead of forward | `TOUCH_FLIP_X` → `true` |
 
 The defaults work on the dual-USB (USB-C + micro-USB) board shown in the photo.
 
@@ -243,6 +242,7 @@ As an example, here's how to show the number of running services. Because the pr
 | "In use by another program" | Close the Arduino IDE's Serial Monitor. Only one program can use the port at a time. |
 | Upload fails with "Could not open COMx... Access is denied" | The PC script is still using the port. Close its window, upload, then start it again. |
 | Upload stalls on `Connecting...` | Hold the **BOOT** button on the board until the upload starts. |
+| Taps land in the wrong place, or the menu won't open | A ring briefly shows where each tap registered. To recalibrate, open the menu (press and hold anywhere) and tap **Touch setup**, or hold a finger on the screen while plugging the board in. |
 | Colours or orientation look wrong | See [Display settings](#display-settings-cyd). |
 
 ## Project structure
