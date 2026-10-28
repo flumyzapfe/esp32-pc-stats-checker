@@ -1,7 +1,7 @@
 """PC Stats Display - host script.
 
-Collects live stats from this computer (CPU, RAM, NVIDIA GPU, network, disk, time) and streams them over USB serial to the
-desk display, one line per second.
+Collects live stats from this computer (CPU, RAM, NVIDIA GPU, network, disk,
+time) and streams them over USB serial to the desk display, once a second.
 
     python pc_stats.py                     # CYD touchscreen dashboard (default)
     python pc_stats.py --board nano        # Arduino Nano + OLED ticker
