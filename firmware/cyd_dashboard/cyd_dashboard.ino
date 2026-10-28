@@ -1,33 +1,46 @@
 // PC Stats Dashboard for the ESP32-2432S028 "Cheap Yellow Display" (CYD)
 // https://github.com/flumyzapfe/esp32-pc-stats-checker
 //
-// Receives one line of stats per second from host/pc_stats.py over USB serial
-// and draws them on the 320x240 touchscreen. Tap anywhere to switch pages:
-//   1. Overview  - CPU, memory + disk, GPU + temperature, network speed
-//   2. History   - 2.5-minute CPU and memory graphs
-//   3. Clock     - big clock with date
-// The onboard RGB LED shows CPU load (green < 50%, yellow < 80%, red above).
+// Receives one line of stats per second from host/pc_stats.py over USB serial and
+// shows them on the 320x240 touchscreen. Tap the right half of the screen for the
+// next page, the left half for the previous one:
+//   Overview - CPU / GPU / RAM gauges, network and disk
+//   GPU      - load, temperature, VRAM, power draw, fan speed
+//   History  - 2.5-minute CPU, GPU and RAM graphs
+//   Network  - download and upload graphs
+//   Clock    - big clock with key stats
+// The page is remembered across restarts. The onboard RGB LED shows CPU load.
 //
-// Serial line format (115200 baud, newline-terminated):
-//   cpu,ram,gpu,gpuTemp,downKBs,upKBs,disk,HH:MM,date
-//   e.g. 37,61,72,64,12697,380,48,14:12,Wed 28 Oct   (gpu/gpuTemp = -1 if unavailable)
+// Files in this sketch:
+//   cyd_dashboard.ino  - hardware: display/touch setup, serial input, main loop (this file)
+//   dashboard_ui.h     - all drawing code (also used by tools/ui_preview on a PC)
+//   dashboard_data.h   - stats model, history and the serial protocol parser
 //
 // Arduino IDE setup: board package "esp32" by Espressif, library "LovyanGFX",
 // board "ESP32 Dev Module". Tested on the dual-USB (USB-C + micro-USB) ST7789 board.
 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
+#include <Preferences.h>
+
+#include "dashboard_data.h"
+#include "dashboard_ui.h"
 
 // ---------- Settings: change these if the screen looks wrong ----------
-#define PANEL_ST7789    1      // 1 = ST7789 (dual-USB boards like yours), 0 = ILI9341 (original CYD)
+#define PANEL_ST7789    1      // 1 = ST7789 (dual-USB boards like the one in the photo), 0 = ILI9341
 #define INVERT_COLORS   false  // flip to true if the background is white instead of black
 #define SWAP_RED_BLUE   false  // flip to true if the "R" swatch on the start screen looks blue
-#define SCREEN_ROTATION 1      // 1 or 3 = landscape. Try 3 if upside down, 5 or 7 if mirrored
+#define SCREEN_ROTATION 1      // 1 or 3 = landscape. Try 3 if upside down
+#define TOUCH_FLIP_X    false  // flip to true if tapping right goes back instead of forward
+
+#define DATA_TIMEOUT_MS 5000   // show "Waiting for PC" if no data for this long
+#define DIM_AFTER_MS    60000  // dim the backlight after this long without data
+#define FRAME_MS        33     // ~30 fps while animating
 
 // RGB LED pins (the LED lights when a pin is LOW). If "green" shows as blue, swap G and B.
 const int LED_R = 4, LED_G = 16, LED_B = 17;
 
-// ---------- Display + touch setup for the CYD ----------
+// ---------- Display + touch hardware for the CYD ----------
 class LGFX : public lgfx::LGFX_Device {
 #if PANEL_ST7789
   lgfx::Panel_ST7789 _panel;
@@ -35,6 +48,7 @@ class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ILI9341 _panel;
 #endif
   lgfx::Bus_SPI _bus;
+  lgfx::Light_PWM _light;
   lgfx::Touch_XPT2046 _touch;
 
 public:
@@ -73,6 +87,15 @@ public:
       _panel.config(c);
     }
     {
+      auto c = _light.config();  // backlight on GPIO 21, dimmable with PWM
+      c.pin_bl = 21;
+      c.invert = false;
+      c.freq = 12000;
+      c.pwm_channel = 7;
+      _light.config(c);
+      _panel.setLight(&_light);
+    }
+    {
       auto c = _touch.config();
       c.x_min = 300;
       c.x_max = 3900;
@@ -95,239 +118,96 @@ public:
 };
 
 LGFX lcd;
-LGFX_Sprite spr(&lcd);
-LovyanGFX* g = &lcd;  // what we draw on: a full-screen sprite if it fits in memory (no flicker)
-bool useSprite = false;
+LGFX_Sprite strip(&lcd);  // one horizontal band of the screen, reused for each band
+int stripH = 0;           // 0 = no sprite memory, draw straight to the screen
+ui::State st;
+Preferences prefs;
 
-// Colours picked to look right in the 8-bit sprite
-#define MKRGB(r, gr, b) ((uint32_t)(((r) << 16) | ((gr) << 8) | (b)))
-const uint32_t C_BG    = MKRGB(0, 0, 0);
-const uint32_t C_TILE  = MKRGB(36, 36, 85);
-const uint32_t C_TRACK = MKRGB(0, 0, 0);
-const uint32_t C_TEXT  = MKRGB(255, 255, 255);
-const uint32_t C_DIM   = MKRGB(146, 146, 170);
-const uint32_t C_CPU   = MKRGB(0, 219, 255);
-const uint32_t C_RAM   = MKRGB(182, 109, 255);
-const uint32_t C_GPU   = MKRGB(0, 219, 85);
-const uint32_t C_NET   = MKRGB(255, 182, 0);
-const uint32_t C_HOT   = MKRGB(255, 36, 0);
+char lineBuf[256];
+size_t lineLen = 0;
+uint32_t lastData = 0, lastFrame = 0, lastTap = 0;
+bool wasTouched = false, dirty = true;
+uint8_t brightness = 0;
 
-// ---------- Data ----------
-struct Stats {
-  int cpu, ram, gpu, gpuTemp, disk;
-  long down, up;          // KB/s
-  char clock[6];
-  char date[16];
-} s;
-
-const int HIST = 150;     // 150 seconds of history
-uint8_t cpuHist[HIST], ramHist[HIST];
-int histCount = 0;
-
-const int PAGES = 3;
-int page = 0;
-bool haveData = false;
-unsigned long lastData = 0, lastTap = 0;
-bool wasTouched = false;
-
-char buf[96];
-size_t len = 0;
-
-void setLed(bool r, bool gr, bool b) {
+void setLed(bool r, bool g, bool b) {
   digitalWrite(LED_R, r ? LOW : HIGH);
-  digitalWrite(LED_G, gr ? LOW : HIGH);
+  digitalWrite(LED_G, g ? LOW : HIGH);
   digitalWrite(LED_B, b ? LOW : HIGH);
 }
 
-void pushHistory(uint8_t* h, int v) {
-  if (histCount == HIST) memmove(h, h + 1, HIST - 1);
-  h[histCount == HIST ? HIST - 1 : histCount] = v;
+void showLoadOnLed(float cpu) {
+  if (cpu < 50) setLed(false, true, false);      // green
+  else if (cpu < 80) setLed(true, true, false);  // yellow
+  else setLed(true, false, false);               // red
 }
 
-// Line format: cpu,ram,gpu,gpuTemp,downKBs,upKBs,disk,HH:MM,date
-bool parseLine(char* line) {
-  char* f[9];
-  int n = 0;
-  for (char* t = strtok(line, ","); t && n < 9; t = strtok(nullptr, ",")) f[n++] = t;
-  if (n != 9) return false;
-
-  s.cpu = constrain(atoi(f[0]), 0, 100);
-  s.ram = constrain(atoi(f[1]), 0, 100);
-  s.gpu = atoi(f[2]);       // -1 = no GPU data
-  s.gpuTemp = atoi(f[3]);
-  s.down = atol(f[4]);
-  s.up = atol(f[5]);
-  s.disk = constrain(atoi(f[6]), 0, 100);
-  strlcpy(s.clock, f[7], sizeof(s.clock));
-  strlcpy(s.date, f[8], sizeof(s.date));
-
-  pushHistory(cpuHist, s.cpu);
-  pushHistory(ramHist, s.ram);
-  if (histCount < HIST) histCount++;
-
-  // LED shows CPU load: green, yellow, red
-  if (s.cpu < 50) setLed(false, true, false);
-  else if (s.cpu < 80) setLed(true, true, false);
-  else setLed(true, false, false);
-  return true;
-}
-
-void fmtRate(long kbs, char* out, size_t n) {
-  if (kbs >= 1024) snprintf(out, n, "%.1f MB/s", kbs / 1024.0);
-  else snprintf(out, n, "%ld KB/s", kbs);
-}
-
-// ---------- Drawing ----------
-void drawHeader(const char* title) {
-  g->fillRect(0, 0, 320, 24, C_TILE);
-  g->setFont(&fonts::Font2);
-  g->setTextColor(C_TEXT);
-  g->setTextDatum(textdatum_t::middle_left);
-  g->drawString(title, 8, 12);
-  g->setTextDatum(textdatum_t::middle_right);
-  g->drawString(s.clock, 312, 12);
-  for (int i = 0; i < PAGES; i++) g->fillCircle(150 + i * 10, 12, 3, i == page ? C_TEXT : C_DIM);
-}
-
-void drawTile(int x, int y, const char* label, const char* value, const char* sub, int pct, uint32_t col) {
-  const int w = 154, h = 102;
-  g->fillRoundRect(x, y, w, h, 8, C_TILE);
-  g->setTextDatum(textdatum_t::top_left);
-  g->setFont(&fonts::Font2);
-  g->setTextColor(col);
-  g->drawString(label, x + 10, y + 8);
-  g->setFont(&fonts::Font4);
-  g->setTextColor(C_TEXT);
-  g->drawString(value, x + 10, y + 28);
-  if (sub) {
-    g->setFont(&fonts::Font2);
-    g->setTextColor(C_DIM);
-    g->drawString(sub, x + 10, y + 58);
+void setBacklight(uint8_t level) {
+  if (level != brightness) {
+    brightness = level;
+    lcd.setBrightness(level);
   }
-  if (pct >= 0) {
-    g->fillRoundRect(x + 10, y + h - 18, w - 20, 8, 4, C_TRACK);
-    int fw = (w - 20) * pct / 100;
-    if (fw > 0) g->fillRoundRect(x + 10, y + h - 18, fw, 8, 4, pct >= 85 ? C_HOT : col);
-  }
-}
-
-void drawOverview() {
-  char v[24], sub[24];
-  g->fillScreen(C_BG);
-  drawHeader("PC STATS");
-
-  snprintf(v, sizeof(v), "%d%%", s.cpu);
-  drawTile(4, 30, "CPU", v, nullptr, s.cpu, C_CPU);
-
-  snprintf(v, sizeof(v), "%d%%", s.ram);
-  snprintf(sub, sizeof(sub), "Disk %d%% used", s.disk);
-  drawTile(162, 30, "MEMORY", v, sub, s.ram, C_RAM);
-
-  if (s.gpu >= 0) {
-    snprintf(v, sizeof(v), "%d%%", s.gpu);
-    snprintf(sub, sizeof(sub), "%d C", s.gpuTemp);
-    drawTile(4, 136, "GPU", v, sub, s.gpu, C_GPU);
-  } else {
-    drawTile(4, 136, "GPU", "n/a", "NVIDIA only", -1, C_GPU);
-  }
-
-  char up[16];
-  fmtRate(s.down, v, sizeof(v));
-  fmtRate(s.up, up, sizeof(up));
-  snprintf(sub, sizeof(sub), "Up %s", up);
-  drawTile(162, 136, "DOWNLOAD", v, sub, -1, C_NET);
-}
-
-void drawGraph(int y, const char* label, int current, uint8_t* hist, uint32_t col) {
-  const int x = 4, w = 312, h = 102;
-  const int gx = 6 + x, gy = y + 26, gh = h - 32;
-  char v[24];
-  g->fillRoundRect(x, y, w, h, 8, C_TILE);
-  g->setFont(&fonts::Font2);
-  g->setTextDatum(textdatum_t::top_left);
-  g->setTextColor(col);
-  snprintf(v, sizeof(v), "%s  %d%%", label, current);
-  g->drawString(v, x + 10, y + 6);
-  g->setTextDatum(textdatum_t::top_right);
-  g->setTextColor(C_DIM);
-  g->drawString("last 2.5 min", x + w - 10, y + 6);
-
-  g->fillRect(gx, gy, HIST * 2, gh, C_TRACK);
-  for (int i = 0; i < histCount; i++) {
-    int bx = gx + (HIST - histCount + i) * 2;
-    int bh = hist[i] * gh / 100;
-    if (bh > 0) g->fillRect(bx, gy + gh - bh, 2, bh, hist[i] >= 85 ? C_HOT : col);
-  }
-}
-
-void drawHistory() {
-  g->fillScreen(C_BG);
-  drawHeader("HISTORY");
-  drawGraph(30, "CPU", s.cpu, cpuHist, C_CPU);
-  drawGraph(136, "MEMORY", s.ram, ramHist, C_RAM);
-}
-
-void drawClock() {
-  char v[40];
-  g->fillScreen(C_BG);
-  g->setTextDatum(textdatum_t::middle_center);
-  g->setTextColor(C_TEXT);
-  g->setFont(&fonts::Font7);
-  g->setTextSize(1.5);
-  g->drawString(s.clock, 160, 95);
-  g->setTextSize(1);
-  g->setFont(&fonts::Font4);
-  g->setTextColor(C_DIM);
-  g->drawString(s.date, 160, 165);
-  g->setFont(&fonts::Font2);
-  snprintf(v, sizeof(v), "CPU %d%%    RAM %d%%", s.cpu, s.ram);
-  g->setTextColor(C_CPU);
-  g->drawString(v, 160, 205);
-  for (int i = 0; i < PAGES; i++) g->fillCircle(150 + i * 10, 232, 3, i == page ? C_TEXT : C_DIM);
-}
-
-void drawWaiting() {
-  g->fillScreen(C_BG);
-  g->setTextDatum(textdatum_t::middle_center);
-  g->setFont(&fonts::Font4);
-  g->setTextColor(C_TEXT);
-  g->drawString("PC Stats", 160, 50);
-  g->setFont(&fonts::Font2);
-  g->setTextColor(C_DIM);
-  g->drawString("Waiting for PC...", 160, 85);
-  g->drawString("Start pc_stats.py on your computer", 160, 105);
-
-  // Colour check: these should read red, green, blue
-  const uint32_t sw[3] = {MKRGB(255, 0, 0), MKRGB(0, 255, 0), MKRGB(0, 0, 255)};
-  const char* names[3] = {"R", "G", "B"};
-  for (int i = 0; i < 3; i++) {
-    int x = 70 + i * 70;
-    g->fillRoundRect(x, 140, 50, 40, 6, sw[i]);
-    g->setTextColor(C_TEXT);
-    g->drawString(names[i], x + 25, 195);
-  }
-  g->setTextColor(C_DIM);
-  g->drawString("Colours wrong? See settings at top of sketch", 160, 222);
 }
 
 void render() {
-  if (!haveData) drawWaiting();
-  else if (page == 0) drawOverview();
-  else if (page == 1) drawHistory();
-  else drawClock();
-  if (useSprite) spr.pushSprite(0, 0);
+  if (stripH == 0) {  // fallback: draw directly (may flicker)
+    ui::Canvas c{&lcd, 0, ui::H};
+    ui::drawFrame(c, st);
+    return;
+  }
+  for (int oy = 0; oy < ui::H; oy += stripH) {
+    ui::Canvas c{&strip, oy, stripH};
+    ui::drawFrame(c, st);
+    strip.pushSprite(0, oy);
+  }
 }
 
-// ---------- Main ----------
+void handleLine(char* line) {
+  Metrics m;
+  if (!proto::parseLine(line, m)) return;
+  st.m = m;
+  st.hist.add(m);
+  if (!st.connected) {
+    st.s = ui::Smoothed();  // gauges sweep up from zero on (re)connect
+    st.connected = true;
+  }
+  lastData = millis();
+  showLoadOnLed(m.cpu);
+  dirty = true;
+}
+
+void readSerial() {
+  while (Serial.available()) {
+    char ch = (char)Serial.read();
+    if (ch == '\n') {
+      lineBuf[lineLen] = '\0';
+      handleLine(lineBuf);
+      lineLen = 0;
+    } else if (ch != '\r' && lineLen < sizeof(lineBuf) - 1) {
+      lineBuf[lineLen++] = ch;
+    }
+  }
+}
+
+void readTouch() {
+  int32_t x, y;
+  bool touched = lcd.getTouch(&x, &y);
+  if (touched && !wasTouched && millis() - lastTap > 250) {
+    if (TOUCH_FLIP_X) x = ui::W - 1 - x;
+    int dir = (x >= ui::W / 2) ? 1 : -1;
+    st.page = (st.page + dir + ui::PAGE_COUNT) % ui::PAGE_COUNT;
+    prefs.putUChar("page", (uint8_t)st.page);
+    lastTap = millis();
+    dirty = true;
+  }
+  wasTouched = touched;
+}
+
 void setup() {
+  Serial.setRxBufferSize(1024);
   Serial.begin(115200);
 
-  // Backlight is GPIO 21 on most boards, 27 on some, so switch both on
-  pinMode(21, OUTPUT);
-  digitalWrite(21, HIGH);
-  pinMode(27, OUTPUT);
+  pinMode(27, OUTPUT);  // backlight on some board revisions
   digitalWrite(27, HIGH);
-
   pinMode(LED_R, OUTPUT);
   pinMode(LED_G, OUTPUT);
   pinMode(LED_B, OUTPUT);
@@ -335,50 +215,42 @@ void setup() {
 
   lcd.init();
   lcd.setRotation(SCREEN_ROTATION);
+  setBacklight(255);
 
-  spr.setColorDepth(8);
-  if (spr.createSprite(320, 240)) {
-    g = &spr;
-    useSprite = true;
+  // Largest band that fits in RAM: 320x120 at 16-bit colour is 75 KB
+  strip.setColorDepth(16);
+  const int heights[] = {120, 80, 60, 40, 30};
+  for (int h : heights) {
+    if (strip.createSprite(ui::W, h)) { stripH = h; break; }
   }
-  render();
+
+  prefs.begin("dashboard", false);
+  st.page = prefs.getUChar("page", 0) % ui::PAGE_COUNT;
+
+  Serial.printf("PC Stats Dashboard ready (strip height %d)\n", stripH);
 }
 
 void loop() {
-  bool dirty = false;
+  readSerial();
+  readTouch();
 
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n') {
-      buf[len] = '\0';
-      if (parseLine(buf)) {
-        haveData = true;
-        lastData = millis();
-        dirty = true;
-      }
-      len = 0;
-    } else if (c != '\r' && len < sizeof(buf) - 1) {
-      buf[len++] = c;
-    }
-  }
-
-  // Back to the waiting screen if the PC stops sending
-  if (haveData && millis() - lastData > 5000) {
-    haveData = false;
+  uint32_t now = millis();
+  if (st.connected && now - lastData > DATA_TIMEOUT_MS) {
+    st.connected = false;
     setLed(false, false, false);
     dirty = true;
   }
+  uint32_t lastActive = lastData > lastTap ? lastData : lastTap;  // a tap wakes the screen
+  setBacklight(!st.connected && now - lastActive > DIM_AFTER_MS ? 40 : 255);
 
-  // Tap anywhere to change page
-  int32_t tx, ty;
-  bool touched = lcd.getTouch(&tx, &ty);
-  if (touched && !wasTouched && millis() - lastTap > 250) {
-    page = (page + 1) % PAGES;
-    lastTap = millis();
-    dirty = true;
+  if (now - lastFrame >= FRAME_MS) {
+    lastFrame = now;
+    bool animating = st.connected && st.s.step(st.m);
+    if (dirty || animating || !st.connected) {  // the waiting screen has a spinner
+      st.ms = now;
+      render();
+      dirty = false;
+    }
   }
-  wasTouched = touched;
-
-  if (dirty) render();
-  delay(10);
+  delay(2);
 }

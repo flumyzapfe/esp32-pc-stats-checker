@@ -13,3 +13,8 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Desktop preview build
+tools/ui_preview/LovyanGFX/
+tools/ui_preview/build/
+screens/

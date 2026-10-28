@@ -61,3 +61,33 @@ jobs:
         run: python -m unittest -v
       - name: Check --help works
         run: python host/pc_stats.py --help
+
+  ui:
+    name: UI preview + protocol tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get LovyanGFX
+        run: git clone --depth 1 --branch 1.2.35 https://github.com/lovyan03/LovyanGFX.git tools/ui_preview/LovyanGFX
+      - name: Build desktop preview tool
+        run: |
+          cmake -S tools/ui_preview -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+      - name: Protocol parser tests (C++)
+        run: ./build/test_protocol
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Python output parses on the firmware side
+        working-directory: host
+        run: |
+          pip install -r requirements.txt
+          python -c "import pc_stats as p, test_pc_stats as t; print(p.format_cyd(t.SAMPLE), end='')" | ../build/test_protocol -
+      - name: Render every page
+        run: |
+          mkdir -p screens
+          ./build/ui_preview screens
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-screens
+          path: screens/*.png

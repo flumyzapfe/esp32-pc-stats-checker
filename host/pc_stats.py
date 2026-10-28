@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def pause_and_exit(msg, code=1):
@@ -60,16 +60,31 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # hide nvidia-smi's cons
 # ---------------------------------------------------------------------------
 
 @dataclass
+class GpuSample:
+    """One reading from the GPU. -1 means unknown or not supported by the card."""
+    util: int = -1            # %
+    temp: int = -1            # deg C
+    mem_used_mb: int = -1
+    mem_total_mb: int = -1
+    power_w: float = -1
+    power_limit_w: float = -1
+    fan: int = -1             # %
+
+
+@dataclass
 class Stats:
-    cpu: int        # %
-    ram: int        # %
-    gpu: int        # %, -1 if unavailable
-    gpu_temp: int   # deg C, -1 if unavailable
-    down_kbs: int   # KB/s
-    up_kbs: int     # KB/s
-    disk: int       # % used on the system drive
-    clock: str      # "HH:MM"
-    date: str       # "Wed 28 Oct"
+    cpu: int                  # %
+    ram: int                  # %
+    down_kbs: int             # KB/s
+    up_kbs: int               # KB/s
+    disk: int                 # % used on the system drive
+    clock: str                # "HH:MM"
+    date: str                 # "Wed 28 Oct"
+    cpu_threads: int = -1
+    ram_used_mb: int = -1
+    ram_total_mb: int = -1
+    gpu: GpuSample = field(default_factory=GpuSample)
+    gpu_name: str = ""        # short name, e.g. "RTX 2070 SUPER"
 
 
 def find_nvidia_smi():
@@ -83,13 +98,32 @@ def find_nvidia_smi():
     return next((c for c in candidates if c and os.path.isfile(c)), None)
 
 
+def short_gpu_name(name):
+    """'NVIDIA GeForce RTX 2070 SUPER' -> 'RTX 2070 SUPER' (fits on the small screen)."""
+    for prefix in ("NVIDIA ", "GeForce "):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    return name.strip()
+
+
+def _num(text):
+    """Parses an nvidia-smi value; '[N/A]' or '[Not Supported]' become -1."""
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return -1
+
+
 class GpuReader:
-    """Usage and temperature of the first NVIDIA GPU.
+    """Stats for the first NVIDIA GPU: load, temperature, VRAM, power and fan.
 
     Uses NVML (NVIDIA's driver library, via the nvidia-ml-py package) when available:
     it's fast and needs nothing on PATH. Falls back to calling nvidia-smi.
-    Reports -1 for both values when there's no NVIDIA GPU.
+    Every value is -1 when there's no NVIDIA GPU, or the card doesn't report it.
     """
+
+    SMI_FIELDS = ("utilization.gpu,temperature.gpu,memory.used,memory.total,"
+                  "power.draw,power.limit,fan.speed")
 
     def __init__(self):
         self.name = None      # e.g. "NVIDIA GeForce RTX 2070 SUPER"
@@ -132,20 +166,49 @@ class GpuReader:
     def available(self):
         return self.source is not None
 
+    @property
+    def short_name(self):
+        return short_gpu_name(self.name) if self.name else ""
+
+    def _nvml_value(self, fn, *args):
+        """Calls an NVML function, returning None if this card doesn't support it."""
+        try:
+            return getattr(self._nvml, fn)(self._handle, *args)
+        except Exception:
+            return None
+
     def read(self):
-        """Returns (usage %, temperature C), or (-1, -1) if unavailable."""
+        """Returns a GpuSample. Fields the card doesn't report stay at -1."""
+        g = GpuSample()
         try:
             if self._handle is not None:
-                util = self._nvml.nvmlDeviceGetUtilizationRates(self._handle).gpu
-                temp = self._nvml.nvmlDeviceGetTemperature(self._handle,
-                                                           self._nvml.NVML_TEMPERATURE_GPU)
-                return int(util), int(temp)
-            if self._smi:
-                util, temp = self._query_smi("utilization.gpu,temperature.gpu", timeout=3)
-                return int(util), int(temp)
+                util = self._nvml_value("nvmlDeviceGetUtilizationRates")
+                temp = self._nvml_value("nvmlDeviceGetTemperature", self._nvml.NVML_TEMPERATURE_GPU)
+                mem = self._nvml_value("nvmlDeviceGetMemoryInfo")
+                power = self._nvml_value("nvmlDeviceGetPowerUsage")           # milliwatts
+                limit = self._nvml_value("nvmlDeviceGetEnforcedPowerLimit")   # milliwatts
+                fan = self._nvml_value("nvmlDeviceGetFanSpeed")
+                if util is not None:
+                    g.util = int(util.gpu)
+                if temp is not None:
+                    g.temp = int(temp)
+                if mem is not None:
+                    g.mem_used_mb = int(mem.used // 2**20)
+                    g.mem_total_mb = int(mem.total // 2**20)
+                if power is not None:
+                    g.power_w = round(power / 1000, 1)
+                if limit is not None:
+                    g.power_limit_w = round(limit / 1000, 1)
+                if fan is not None:
+                    g.fan = int(fan)
+            elif self._smi:
+                v = [_num(x) for x in self._query_smi(self.SMI_FIELDS, timeout=3)]
+                g = GpuSample(util=int(v[0]), temp=int(v[1]), mem_used_mb=int(v[2]),
+                              mem_total_mb=int(v[3]), power_w=v[4], power_limit_w=v[5],
+                              fan=int(v[6]))
         except Exception:
-            pass
-        return -1, -1
+            return GpuSample()
+        return g
 
 
 class StatsCollector:
@@ -153,6 +216,7 @@ class StatsCollector:
 
     def __init__(self):
         self.gpu = GpuReader()
+        self.cpu_threads = psutil.cpu_count(logical=True) or -1
         psutil.cpu_percent()  # the first reading is always 0, so take it now
         self._net = psutil.net_io_counters()
         self._t = time.monotonic()
@@ -171,30 +235,56 @@ class StatsCollector:
         except OSError:
             disk = 0
 
-        gpu, gpu_temp = self.gpu.read()
+        mem = psutil.virtual_memory()
         return Stats(
             cpu=cpu,
-            ram=round(psutil.virtual_memory().percent),
-            gpu=gpu,
-            gpu_temp=gpu_temp,
+            ram=round(mem.percent),
             down_kbs=down,
             up_kbs=up,
             disk=disk,
             clock=time.strftime("%H:%M"),
             date=time.strftime("%a %d %b"),
+            cpu_threads=self.cpu_threads,
+            ram_used_mb=int((mem.total - mem.available) // 2**20),
+            ram_total_mb=int(mem.total // 2**20),
+            gpu=self.gpu.read(),
+            gpu_name=self.gpu.short_name,
         )
 
 
 # ---------------------------------------------------------------------------
-# Serial protocol: one CSV line per reading. Each board has its own format.
+# Serial protocol. Each board has its own line format.
 # ---------------------------------------------------------------------------
 
+def _clean(text):
+    """Text values can't contain the protocol's separators."""
+    return str(text).replace(",", " ").replace("=", " ").replace("\n", " ").strip()
+
+
+def _fmt_num(v):
+    return str(int(v)) if float(v).is_integer() else f"{v:.1f}"
+
+
 def format_cyd(s: Stats) -> str:
-    return (f"{s.cpu},{s.ram},{s.gpu},{s.gpu_temp},{s.down_kbs},{s.up_kbs},"
-            f"{s.disk},{s.clock},{s.date}\n")
+    """key=value pairs; the firmware ignores keys it doesn't know and treats missing ones
+    as unknown, so either side can be updated without breaking the other."""
+    g = s.gpu
+    fields = [
+        ("cpu", s.cpu), ("cpun", s.cpu_threads),
+        ("ram", s.ram), ("ramu", s.ram_used_mb), ("ramt", s.ram_total_mb),
+        ("gpu", g.util), ("gput", g.temp), ("vram", g.mem_used_mb), ("vramt", g.mem_total_mb),
+        ("gpw", g.power_w), ("gpwl", g.power_limit_w), ("fan", g.fan),
+        ("dn", s.down_kbs), ("up", s.up_kbs), ("disk", s.disk),
+    ]
+    parts = [f"{k}={_fmt_num(v)}" for k, v in fields if v is not None and v >= 0]
+    parts += [f"t={_clean(s.clock)}", f"d={_clean(s.date)}"]
+    if s.gpu_name:
+        parts.append(f"gn={_clean(s.gpu_name)[:23]}")
+    return ",".join(parts) + "\n"
 
 
 def format_nano(s: Stats) -> str:
+    """Positional: cpu,ram,HH:MM"""
     return f"{s.cpu},{s.ram},{s.clock}\n"
 
 
@@ -258,6 +348,11 @@ def run(board, fixed_port=None):
     gpu = collector.gpu
     if gpu.available:
         print(f"GPU: {gpu.name} (read via {gpu.source})")
+        sample = gpu.read()
+        extras = [name for name, v in (("VRAM", sample.mem_total_mb), ("power", sample.power_w),
+                                      ("fan", sample.fan)) if v >= 0]
+        if extras:
+            print(f"     also reporting: {', '.join(extras)}")
     else:
         print("GPU: no NVIDIA GPU detected - the GPU tile will show n/a")
     print("Press Ctrl+C to stop.\n")
