@@ -1,6 +1,6 @@
 """Shared test data: a full sample reading and LibreHardwareMonitor JSON trees
 shaped like the real data.json (current and older formats)."""
-from pcstats.model import (CRITICAL, INFO, WARNING, Alert, DiskHealth, Drive, Fan, GpuSample,
+from pcstats.model import (INFO, WARNING, Alert, DiskHealth, Drive, Fan, GpuSample,
                            Process, Stats, TempSensor)
 
 SAMPLE = Stats(

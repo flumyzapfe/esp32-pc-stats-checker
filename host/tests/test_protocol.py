@@ -3,7 +3,7 @@ import copy
 import unittest
 
 from pcstats import protocol
-from pcstats.model import Alert, DiskHealth, Drive, Fan, GpuSample, Process, Stats, TempSensor
+from pcstats.model import Alert, DiskHealth, Drive, Fan, Process, Stats, TempSensor
 from tests.fixtures import SAMPLE
 
 
