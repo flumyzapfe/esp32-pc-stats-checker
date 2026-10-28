@@ -105,8 +105,10 @@ If the OLED stays blank, check that SDA and SCL aren't swapped, then try I²C ad
 
 ## Troubleshooting
 
-- **"Couldn't find the board automatically":** the script lists the ports it can see. Rerun it with yours, e.g. `python cyd_stats.py COM5` or `/dev/ttyUSB0`.
-- **"Access denied" / port busy:** close the Arduino Serial Monitor, since only one program can use the port at a time.
+- **Window closes instantly when double-clicked:** usually a missing library. `cyd_stats.py` now stays open and shows the error, along with the exact `pip install` command to fix it.
+- **Stuck on "Waiting for the board":** the script lists the ports it can see. If your board is there but not picked up, pass it in, e.g. `python cyd_stats.py COM5` or `/dev/ttyUSB0`. If no ports are listed, try a different USB cable, since some are charge-only.
+- **"In use by another program":** close the Arduino Serial Monitor, since only one program can use the port at a time. The script retries automatically.
+- **Unplugged the board?** `cyd_stats.py` reconnects by itself when it's plugged back in.
 - **GPU shows n/a:** GPU stats currently come from `nvidia-smi`, so they work on NVIDIA cards only.
 
 ## Ideas / roadmap
