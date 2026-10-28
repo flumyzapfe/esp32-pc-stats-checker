@@ -1,6 +1,19 @@
-// PC Stats Dashboard for the ESP32-2432S028 "Cheap Yellow Display"
-// Receives stats from cyd_stats.py over USB. Tap the screen to switch pages.
-// Needs: ESP32 board package (Espressif) + LovyanGFX library.
+// PC Stats Dashboard for the ESP32-2432S028 "Cheap Yellow Display" (CYD)
+// https://github.com/flumyzapfe/esp32-pc-stats-checker
+//
+// Receives one line of stats per second from host/pc_stats.py over USB serial
+// and draws them on the 320x240 touchscreen. Tap anywhere to switch pages:
+//   1. Overview  - CPU, memory + disk, GPU + temperature, network speed
+//   2. History   - 2.5-minute CPU and memory graphs
+//   3. Clock     - big clock with date
+// The onboard RGB LED shows CPU load (green < 50%, yellow < 80%, red above).
+//
+// Serial line format (115200 baud, newline-terminated):
+//   cpu,ram,gpu,gpuTemp,downKBs,upKBs,disk,HH:MM,date
+//   e.g. 37,61,72,64,12697,380,48,14:12,Wed 28 Oct   (gpu/gpuTemp = -1 if unavailable)
+//
+// Arduino IDE setup: board package "esp32" by Espressif, library "LovyanGFX",
+// board "ESP32 Dev Module". Tested on the dual-USB (USB-C + micro-USB) ST7789 board.
 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -282,7 +295,7 @@ void drawWaiting() {
   g->setFont(&fonts::Font2);
   g->setTextColor(C_DIM);
   g->drawString("Waiting for PC...", 160, 85);
-  g->drawString("Run cyd_stats.py on your computer", 160, 105);
+  g->drawString("Start pc_stats.py on your computer", 160, 105);
 
   // Colour check: these should read red, green, blue
   const uint32_t sw[3] = {MKRGB(255, 0, 0), MKRGB(0, 255, 0), MKRGB(0, 0, 255)};

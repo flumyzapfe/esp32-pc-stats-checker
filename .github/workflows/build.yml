@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  firmware:
+    name: Compile ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: CYD dashboard (ESP32)
+            fqbn: esp32:esp32:esp32
+            platforms: |
+              - name: esp32:esp32
+                source-url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+            libraries: |
+              - name: LovyanGFX
+            sketch: firmware/cyd_dashboard
+          - name: Nano OLED ticker (AVR)
+            fqbn: arduino:avr:nano
+            platforms: |
+              - name: arduino:avr
+            libraries: |
+              - name: Adafruit SSD1306
+              - name: Adafruit GFX Library
+              - name: Adafruit BusIO
+            sketch: firmware/nano_oled_ticker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/compile-sketches@v1
+        with:
+          fqbn: ${{ matrix.fqbn }}
+          platforms: ${{ matrix.platforms }}
+          libraries: ${{ matrix.libraries }}
+          sketch-paths: |
+            - ${{ matrix.sketch }}
+          enable-warnings-report: true
+
+  host:
+    name: Test host script (Python ${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install -r host/requirements.txt
+      - name: Run unit tests
+        working-directory: host
+        run: python -m unittest -v
+      - name: Check --help works
+        run: python host/pc_stats.py --help

@@ -1,6 +1,12 @@
-// Desk Stats Ticker - Arduino Nano + 0.91" SSD1306 OLED (128x32, I2C)
+// PC Stats Ticker - Arduino Nano + 0.91" SSD1306 OLED (128x32, I2C)
+// https://github.com/flumyzapfe/esp32-pc-stats-checker
+//
+// Shows CPU and RAM bars plus the time, sent once a second by
+//   python host/pc_stats.py --board nano
+//
 // Wiring: OLED GND->GND, VCC->5V, SCL->A5, SDA->A4
-// Expects lines over USB serial like:  23,54,14:05\n   (cpu%, ram%, time)
+// Serial line format (115200 baud):  cpu,ram,HH:MM   e.g. 23,54,14:05
+// Libraries: "Adafruit SSD1306" (+ "Adafruit GFX")
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>

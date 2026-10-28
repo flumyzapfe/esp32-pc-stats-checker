@@ -1,24 +1,23 @@
 @echo off
-rem Double-click this to start the PC Stats Dashboard. The window stays open so you can read any errors.
+rem PC Stats Display launcher for Windows.
+rem Double-click to start. Installs the Python libraries on first run, and keeps
+rem the window open so you can read any errors. Extra arguments are passed on,
+rem e.g.  run_dashboard.bat --port COM5
 cd /d "%~dp0"
-title PC Stats Dashboard
+title PC Stats Display
 
 where py >nul 2>nul
 if %errorlevel%==0 (set "PY=py -3") else (set "PY=python")
 
-echo Using Python:
-%PY% --version
+%PY% --version >nul 2>nul
 if errorlevel 1 (
-    echo.
     echo Python was not found. Install it from https://www.python.org/downloads/
-    echo and tick "Add python.exe to PATH" during setup.
+    echo and tick "Add python.exe to PATH" during setup, then run this again.
     echo.
     pause
     exit /b 1
 )
-echo.
 
-rem Install the libraries the first time (or if they are missing)
 %PY% -c "import psutil, serial" >nul 2>nul
 if errorlevel 1 (
     echo Installing required libraries ^(first run only^)...
@@ -32,7 +31,7 @@ if errorlevel 1 (
     echo.
 )
 
-%PY% cyd_stats.py %*
+%PY% pc_stats.py %*
 
 echo.
 echo The script has stopped. Any error is shown above.
