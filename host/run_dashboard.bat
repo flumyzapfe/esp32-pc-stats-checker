@@ -18,6 +18,20 @@ if errorlevel 1 (
 )
 echo.
 
+rem Install the libraries the first time (or if they are missing)
+%PY% -c "import psutil, serial" >nul 2>nul
+if errorlevel 1 (
+    echo Installing required libraries ^(first run only^)...
+    %PY% -m pip install --user -r requirements.txt
+    if errorlevel 1 (
+        echo.
+        echo Could not install the libraries. See the error above.
+        pause
+        exit /b 1
+    )
+    echo.
+)
+
 %PY% cyd_stats.py %*
 
 echo.
