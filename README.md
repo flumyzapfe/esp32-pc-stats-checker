@@ -55,6 +55,7 @@ firmware/
   cyd_dashboard/cyd_dashboard.ino        ESP32 CYD touchscreen dashboard
   nano_oled_ticker/nano_oled_ticker.ino  Arduino Nano + SSD1306 OLED ticker
 host/
+  run_dashboard.bat                      Windows launcher for cyd_stats.py
   cyd_stats.py                           PC script for the CYD
   nano_stats.py                          PC script for the Nano
   requirements.txt
@@ -83,6 +84,8 @@ docs/                                    Images for this README
    pip install -r requirements.txt
    python cyd_stats.py          # or: python cyd_stats.py COM5
    ```
+
+   On Windows you can just double-click `host/run_dashboard.bat` instead.
 
 5. Tap anywhere on the screen to cycle through the pages. The onboard LED goes green, yellow or red with CPU load.
 
